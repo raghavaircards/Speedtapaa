@@ -1,0 +1,343 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+// Tablet-friendly reflex tapping game
+// - Works great as a website and can be packaged as a PWA
+// - Uses Pointer Events (better than touch/mouse split)
+// - Big hit targets, responsive layout, and simple game loop
+// - Local high score saved in localStorage
+//
+// Tailwind CSS is assumed. This component will stretch to fit its container.
+// You can drop this into a Next.js/React app page and it will run.
+//
+// Suggested <head> tags in your HTML/Next _document.tsx for best tablet behavior:
+// <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+// <meta name="theme-color" content="#0f172a" />
+//
+// Suggested CSS on <html> or container: touch-action: manipulation; overscroll-behavior: contain;
+// This reduces accidental zooming and pull-to-refresh during fast tapping.
+
+// Types
+interface Target {
+  id: number;
+  x: number; // 0..1 (percentage of width)
+  y: number; // 0..1 (percentage of height)
+  size: number; // in px, computed at spawn
+  bornAt: number; // ms
+  lifeMs: number; // how long it stays alive
+}
+
+type Difficulty = "easy" | "normal" | "hard";
+
+function useLocalStorage<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? (JSON.parse(v) as T) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  }, [key, value]);
+  return [value, setValue] as const;
+}
+
+function pickSpawn({
+  width,
+  height,
+  margin = 32,
+}: {
+  width: number;
+  height: number;
+  margin?: number;
+}) {
+  const x = margin + Math.random() * (width - margin * 2);
+  const y = margin + Math.random() * (height - margin * 2);
+  return { x, y };
+}
+
+function sizeForDifficulty(difficulty: Difficulty, dpiScale = 1) {
+  // Large hit areas for tablets; shrink as difficulty increases
+  const base = { easy: 160, normal: 120, hard: 96 }[difficulty];
+  return Math.round(base * dpiScale);
+}
+
+function lifeForDifficulty(difficulty: Difficulty) {
+  return { easy: 1600, normal: 1200, hard: 900 }[difficulty];
+}
+
+function spawnIntervalMs(difficulty: Difficulty) {
+  return { easy: 650, normal: 520, hard: 420 }[difficulty];
+}
+
+function clamp(v: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, v));
+}
+
+let gid = 1;
+
+export default function TabletReflexTapGame() {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [running, setRunning] = useState(false);
+  const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [countdownSec, setCountdownSec] = useState(30);
+
+  const [score, setScore] = useState(0);
+  const [hits, setHits] = useState(0);
+  const [misses, setMisses] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [best, setBest] = useLocalStorage<number>("tapgame_best", 0);
+  const [targets, setTargets] = useState<Target[]>([]);
+
+  const dpiScale = typeof window !== "undefined" ? Math.min(1.2, window.devicePixelRatio || 1) : 1;
+
+  const targetSize = useMemo(() => sizeForDifficulty(difficulty, dpiScale), [difficulty, dpiScale]);
+  const targetLife = useMemo(() => lifeForDifficulty(difficulty), [difficulty]);
+  const intervalMs = useMemo(() => spawnIntervalMs(difficulty), [difficulty]);
+
+  // Timer loop
+  useEffect(() => {
+    if (!running) return;
+
+    let stopped = false;
+    let lastSpawn = performance.now();
+    let lastTick = performance.now();
+
+    const tick = () => {
+      if (stopped) return;
+      const now = performance.now();
+
+      // De-spawn expired targets
+      setTargets((prev) => prev.filter((t) => now - t.bornAt < t.lifeMs));
+
+      // Countdown update once per second
+      if (now - lastTick >= 250) {
+        setCountdownSec((s) => (s > 0 ? s - (now - lastTick) / 1000 : 0));
+        lastTick = now;
+      }
+
+      // Spawn new targets at interval
+      if (now - lastSpawn >= intervalMs) {
+        lastSpawn = now;
+        const el = containerRef.current;
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const { x, y } = pickSpawn({ width: rect.width, height: rect.height, margin: targetSize * 0.8 });
+          const t: Target = {
+            id: gid++,
+            x: x / rect.width,
+            y: y / rect.height,
+            size: targetSize,
+            lifeMs: targetLife,
+            bornAt: now,
+          };
+          setTargets((prev) => [...prev, t]);
+        }
+      }
+
+      // End game
+      if (countdownSec <= 0) {
+        setRunning(false);
+        setBest((b) => (score > b ? score : b));
+        return;
+      }
+
+      requestAnimationFrame(tick);
+    };
+
+    const raf = requestAnimationFrame(tick);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [running, intervalMs, targetLife, targetSize, countdownSec, score, setBest]);
+
+  function startGame() {
+    setScore(0);
+    setHits(0);
+    setMisses(0);
+    setCombo(0);
+    setTargets([]);
+    setCountdownSec(30);
+    setRunning(true);
+  }
+
+  function stopGame() {
+    setRunning(false);
+  }
+
+  function onHit(targetId: number) {
+    setTargets((prev) => prev.filter((t) => t.id !== targetId));
+    setHits((h) => h + 1);
+    setCombo((c) => c + 1);
+    // Reward combos slightly more
+    setScore((s) => s + 10 + Math.floor(Math.max(0, combo - 1) * 2));
+  }
+
+  function onMiss() {
+    setMisses((m) => m + 1);
+    setCombo(0);
+    // Light penalty
+    setScore((s) => Math.max(0, s - 3));
+  }
+
+  // Pointer handling
+  function handlePointerDown(e: React.PointerEvent) {
+    // Only react to primary pointer (finger/pen)
+    if (!running || !e.isPrimary) return;
+
+    // If user tapped outside any target, count a miss
+    const el = e.target as HTMLElement;
+    if (!el.closest('[data-role="target"]')) {
+      onMiss();
+    }
+  }
+
+  function TargetBubble({ t }: { t: Target }) {
+    const [now, setNow] = useState(performance.now());
+
+    useEffect(() => {
+      let mounted = true;
+      const loop = () => {
+        if (!mounted) return;
+        setNow(performance.now());
+        requestAnimationFrame(loop);
+      };
+      const id = requestAnimationFrame(loop);
+      return () => {
+        mounted = false;
+        cancelAnimationFrame(id);
+      };
+    }, []);
+
+    // Compute fade based on lifetime
+    const life = clamp((now - t.bornAt) / t.lifeMs, 0, 1);
+    const scale = 1 + life * 0.2; // slight grow
+    const opacity = 1 - life * 0.4; // fade out
+
+    const style: React.CSSProperties = {
+      left: `${t.x * 100}%`,
+      top: `${t.y * 100}%`,
+      width: t.size,
+      height: t.size,
+      transform: `translate(-50%, -50%) scale(${scale})`,
+      opacity,
+    };
+
+    return (
+      <button
+        data-role="target"
+        onPointerDown={(e) => {
+          if (!e.isPrimary) return;
+          onHit(t.id);
+        }}
+        className="absolute rounded-full shadow-xl focus:outline-none active:scale-95 transition-transform duration-75 select-none"
+        style={style}
+        aria-label="Hit target"
+      >
+        {/* Inner visual */}
+        <div className="w-full h-full rounded-full border-4 border-white/80 bg-emerald-500/90 backdrop-blur-sm" />
+      </button>
+    );
+  }
+
+  const accuracy = hits + misses > 0 ? Math.round((hits / (hits + misses)) * 100) : 100;
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full h-[100dvh] bg-slate-900 text-slate-100 overflow-hidden"
+      onPointerDown={handlePointerDown}
+      style={{ touchAction: "manipulation", overscrollBehavior: "contain" }}
+    >
+      {/* HUD */}
+      <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between gap-2 pointer-events-none">
+        <div className="flex items-center gap-3 pointer-events-auto">
+          <button
+            onClick={running ? stopGame : startGame}
+            className="px-4 py-2 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-slate-700 shadow-lg"
+          >
+            {running ? "Pause" : "Start"}
+          </button>
+          <select
+            className="px-3 py-2 rounded-2xl bg-slate-800 shadow-lg"
+            disabled={running}
+            value={difficulty}
+            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+          >
+            <option value="easy">Easy</option>
+            <option value="normal">Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-4 text-sm sm:text-base">
+          <div className="px-3 py-1 rounded-xl bg-slate-800 shadow">Score: <span className="font-semibold">{score}</span></div>
+          <div className="px-3 py-1 rounded-xl bg-slate-800 shadow">Combo: <span className="font-semibold">{combo}×</span></div>
+          <div className="px-3 py-1 rounded-xl bg-slate-800 shadow">Acc: <span className="font-semibold">{accuracy}%</span></div>
+          <div className="px-3 py-1 rounded-xl bg-slate-800 shadow">Time: <span className="font-semibold">{Math.max(0, Math.ceil(countdownSec))}s</span></div>
+          <div className="px-3 py-1 rounded-xl bg-indigo-700 shadow">Best: <span className="font-semibold">{best}</span></div>
+        </div>
+      </div>
+
+      {/* Targets */}
+      {targets.map((t) => (
+        <TargetBubble key={t.id} t={t} />
+      ))}
+
+      {/* Empty-state / overlay */}
+      {!running && (
+        <div className="absolute inset-0 grid place-items-center p-6">
+          <div className="max-w-xl w-full rounded-3xl bg-slate-800/70 backdrop-blur-md p-6 shadow-2xl">
+            <h1 className="text-3xl font-bold mb-2">Reflex Tap</h1>
+            <p className="text-slate-300 mb-4">
+              Tap the glowing circles as they appear. Misses reset your combo. You have 30 seconds—go for a high score!
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl bg-slate-900/60 p-4">
+                <div className="text-slate-400 text-sm">Recommended</div>
+                <div className="text-lg">Use fullscreen and landscape on a tablet.</div>
+              </div>
+              <div className="rounded-2xl bg-slate-900/60 p-4">
+                <div className="text-slate-400 text-sm">Tips</div>
+                <ul className="list-disc ml-5">
+                  <li>Two thumbs near the center.</li>
+                  <li>Keep steady tempo for combos.</li>
+                </ul>
+              </div>
+              <div className="rounded-2xl bg-slate-900/60 p-4">
+                <div className="text-slate-400 text-sm">Difficulty</div>
+                <div>Easy = bigger + slower, Hard = smaller + faster.</div>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                onClick={startGame}
+                className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-600 shadow-lg text-white"
+              >
+                Start Game
+              </button>
+              <select
+                className="px-4 py-3 rounded-2xl bg-slate-900/80"
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+              >
+                <option value="easy">Easy</option>
+                <option value="normal">Normal</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer badges */}
+      <div className="absolute bottom-0 left-0 right-0 p-3 flex items-center justify-between text-xs text-slate-400">
+        <div>Tablet-optimized • 60fps target • Pointer Events</div>
+        <div>v1.0</div>
+      </div>
+    </div>
+  );
+}
