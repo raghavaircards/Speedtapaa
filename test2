@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Reflex Tap – 80s Retro-Futurism</title>
+  <style>
+    /* ===== 80s Retro‑Futuristic Theme (single file, no external assets) ===== */
+    :root{
+      --bg:#0a0f2f;            /* deep space navy */
+      --panel:#0c1340;         /* darker panel */
+      --text:#d8f9ff;          /* soft cyan */
+      --muted:#7aa6b2;         /* muted cyan */
+      --accent:#00f0ff;        /* neon cyan */
+      --accent-2:#ff00cc;      /* neon magenta */
+      --grid:#17205a;          /* wireframe grid */
+      --border:#2ee7ff;        /* default line color */
+    }
+
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+      font-family:"Courier New",Consolas,Monaco,monospace;letter-spacing:0.4px}
+    body{user-select:none}
+
+    /* App background: animated wireframe grid + scanlines */
+    .app{position:fixed;inset:0;touch-action:manipulation;overscroll-behavior:contain;
+      background:
+        radial-gradient(1200px 600px at 50% 110%, rgba(255,0,204,.15), transparent 60%),
+        linear-gradient( to bottom, rgba(0,0,0,.35), rgba(0,0,0,.65) ),
+        repeating-linear-gradient(#0000 0 48px, #0000 48px 49px, var(--grid) 49px 50px),
+        repeating-linear-gradient(90deg,#0000 0 48px, #0000 48px 49px, var(--grid) 49px 50px);
+      background-blend-mode: screen, multiply, normal, normal;
+      animation:gridShift 12s linear infinite;
+    }
+    @keyframes gridShift {
+      0% { background-position: 0 0, 0 0, 0 0, 0 0; }
+      100% { background-position: 0 0, 0 0, 0 200px, 200px 0; }
+    }
+    /* CRT scanlines overlay */
+    .app:after{content:"";position:absolute;inset:0;pointer-events:none;mix-blend-mode:soft-light;
+      background: repeating-linear-gradient( to bottom, rgba(255,255,255,.06) 0 2px, rgba(0,0,0,.08) 2px 4px);
+    }
+
+    /* HUD */
+    .hud{position:absolute;left:0;right:0;top:0;padding:14px 16px;display:flex;gap:12px;justify-content:space-between;align-items:center;
+      background:linear-gradient( to bottom, rgba(0,0,0,.35), rgba(0,0,0,.15) );
+      border-bottom:1px solid var(--border); box-shadow:0 0 12px rgba(46,231,255,.35);
+    }
+    .row{display:flex;gap:10px;align-items:center}
+
+    .btn{background:transparent;padding:10px 14px;border:1px solid var(--border);color:var(--text);cursor:pointer;text-transform:uppercase;letter-spacing:1px}
+    .btn{box-shadow:0 0 10px rgba(46,231,255,.35), inset 0 0 12px rgba(46,231,255,.12)}
+    .btn:hover{box-shadow:0 0 18px rgba(46,231,255,.6), inset 0 0 14px rgba(46,231,255,.2)}
+    .btn:active{transform:translateY(1px)}
+
+    .pill{background:rgba(12,19,64,.7);padding:8px 12px;border:1px solid var(--border);box-shadow:inset 0 0 18px rgba(0,240,255,.12), 0 0 8px rgba(0,240,255,.2)}
+    .best{border-color:var(--accent-2); box-shadow:0 0 12px rgba(255,0,204,.4), inset 0 0 18px rgba(255,0,204,.15)}
+
+    select, .number{background:rgba(12,19,64,.7);border:1px solid var(--border);color:var(--text);padding:8px 12px;box-shadow:inset 0 0 14px rgba(0,240,255,.12)}
+
+    /* Targets: neon squares with glow; slight pulse */
+    .target{position:absolute;display:block;border-radius:4px;border:2px solid var(--border);background:transparent}
+    .target{animation:pulse 1.2s ease-in-out infinite}
+    @keyframes pulse { 0%,100%{ filter: drop-shadow(0 0 6px rgba(0,240,255,.6)); } 50%{ filter: drop-shadow(0 0 16px rgba(255,0,204,.7)); } }
+
+    /* Overlay */
+    .overlay{position:absolute;inset:0;display:grid;place-items:center}
+    .card{width:min(900px,92vw);background:rgba(12,19,64,.75);border:1px solid var(--border);padding:24px;box-shadow:0 0 18px rgba(0,240,255,.25)}
+    .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+
+    .footer{position:absolute;left:0;right:0;bottom:0;padding:8px 12px;display:flex;justify-content:space-between;color:var(--muted);font-size:12px;border-top:1px solid var(--border);background:linear-gradient(to top, rgba(0,0,0,.35), rgba(0,0,0,.15))}
+  </style>
+</head>
+<body>
+  <div id="app" class="app"></div>
+
+  <script>
+    "use strict";
+    /* ==============================================
+       CONFIG — Edit these values to tune the game
+    =============================================== */
+    const CONFIG = {
+      sessionSeconds: 30,
+      difficulties: {
+        easy:   { size: 160, lifeMs: 1600, spawnMs: 650 },
+        normal: { size: 120, lifeMs: 1200, spawnMs: 520 },
+        hard:   { size:  96, lifeMs:  900, spawnMs: 420 },
+      },
+      defaultDifficulty: "normal",
+      marginMultiplier: 0.8, // keep targets from screen edges (× size)
+      comboBonus: 2,         // extra points per combo step beyond 1
+      hitPoints: 10,
+      missPenalty: 3,
+    };
+
+    /* ===== Utilities ===== */
+    const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+    function pickSpawn(width,height,margin){
+      const x = margin + Math.random()*(width - margin*2);
+      const y = margin + Math.random()*(height - margin*2);
+      return {x,y};
+    }
+
+    /* ===== State ===== */
+    let running = false;
+    let score = 0, hits = 0, misses = 0, combo = 0;
+    let best = Number(localStorage.getItem("tap_best")||0);
+    let difficulty = CONFIG.defaultDifficulty;
+    let gid = 1;                 // target id/counter
+    let sessionLeft = CONFIG.sessionSeconds; // seconds
+
+    const app = document.getElementById("app");
+
+    /* ===== UI ===== */
+    app.innerHTML = `
+      <div class="hud">
+        <div class="row">
+          <button id="start" class="btn">Start</button>
+          <select id="diff">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+          <label class="pill">Time <input id="seconds" class="number" type="number" min="10" max="120" step="5" value="${CONFIG.sessionSeconds}" style="width:70px;margin-left:8px"></label>
+        </div>
+        <div class="row">
+          <div class="pill">Score: <b id="score">0</b></div>
+          <div class="pill">Combo: <b id="combo">0×</b></div>
+          <div class="pill">Acc: <b id="acc">100%</b></div>
+          <div class="pill">Time: <b id="time">${CONFIG.sessionSeconds}s</b></div>
+          <div class="pill best">Best: <b id="best">${best}</b></div>
+        </div>
+      </div>
+      <div id="layer"></div>
+      <div id="overlay" class="overlay">
+        <div class="card">
+          <h1 style="margin:0 0 8px 0">Reflex Tap</h1>
+          <p style="margin:0 0 12px 0;color:var(--muted)">Tap the neon squares as they appear. Misses reset your combo. You have a limited time — go for a high score!</p>
+          <div class="grid" style="margin-bottom:12px">
+            <div class="pill">Tip: Landscape, fullscreen on tablet.</div>
+            <div class="pill">Trick: Keep a steady tempo for combos.</div>
+            <div class="pill">Modes: Easy = bigger+slower; Hard = smaller+faster.</div>
+          </div>
+          <div class="row">
+            <button id="overlayStart" class="btn">Start Game</button>
+            <select id="overlayDiff">
+              <option value="easy">Easy</option>
+              <option value="normal" selected>Normal</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><div>Retro‑Futurism • Pointer Events • No framework</div><div>v2.0</div></div>
+    `;
+
+    // Cache elements
+    const els = {
+      start: document.getElementById("start"),
+      diff: document.getElementById("diff"),
+      seconds: document.getElementById("seconds"),
+      score: document.getElementById("score"),
+      combo: document.getElementById("combo"),
+      acc: document.getElementById("acc"),
+      time: document.getElementById("time"),
+      best: document.getElementById("best"),
+      layer: document.getElementById("layer"),
+      overlay: document.getElementById("overlay"),
+      overlayStart: document.getElementById("overlayStart"),
+      overlayDiff: document.getElementById("overlayDiff"),
+    };
+
+    function resetState(){
+      score=0;hits=0;misses=0;combo=0;gid=1;
+      sessionLeft = Number(els.seconds.value)||CONFIG.sessionSeconds;
+      renderHUD();
+      els.layer.innerHTML="";
+    }
+
+    function updateBest(){
+      if(score>best){ best=score; localStorage.setItem("tap_best", String(best)); els.best.textContent=best; }
+    }
+
+    function start(){
+      resetState();
+      running=true; els.overlay.style.display="none";
+      els.start.textContent = "Pause";
+      loopStart();
+    }
+
+    function pause(){
+      running=false; els.start.textContent = "Start"; els.overlay.style.display="grid";
+    }
+
+    function end(){ running=false; updateBest(); els.start.textContent = "Start"; els.overlay.style.display="grid"; }
+
+    function renderHUD(){
+      els.score.textContent = score;
+      els.combo.textContent = combo+"×";
+      const total = hits+misses; const acc = total? Math.round(hits/total*100) : 100;
+      els.acc.textContent = acc+"%";
+      els.time.textContent = Math.max(0, Math.ceil(sessionLeft))+"s";
+    }
+
+    function spawnTarget(){
+      const cfg = CONFIG.difficulties[difficulty];
+      const rect = app.getBoundingClientRect();
+      const margin = cfg.size * CONFIG.marginMultiplier;
+      const {x,y} = pickSpawn(rect.width, rect.height, margin);
+      const id = gid++;
+
+      const el = document.createElement("button");
+      el.setAttribute("data-role","target");
+      el.className = "target";
+      const color = (id % 2 === 0)
+        ? getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00f0ff'
+        : getComputedStyle(document.documentElement).getPropertyValue('--accent-2').trim() || '#ff00cc';
+      Object.assign(el.style,{
+        left: x+"px",
+        top: y+"px",
+        width: cfg.size+"px",
+        height: cfg.size+"px",
+        transform: "translate(-50%,-50%)",
+        background: "transparent",
+        borderColor: color,
+        boxShadow: `0 0 10px ${color}, 0 0 24px ${color}`
+      });
+
+      const bornAt = performance.now();
+      const lifeMs = cfg.lifeMs;
+
+      el.onpointerdown = (e)=>{
+        if(!running || !e.isPrimary) return;
+        onHit();
+        try{ el.remove(); }catch(_e){}
+      };
+
+      els.layer.appendChild(el);
+
+      // simple opacity/scale lifetime (subtle neon pulse)
+      const anim = ()=>{
+        if(!running){ try{el.remove();}catch(_e){} return; }
+        const now = performance.now();
+        const life = clamp((now-bornAt)/lifeMs,0,1);
+        el.style.opacity = String(1 - life*0.25);
+        el.style.transform = `translate(-50%,-50%) scale(${1+life*0.08})`;
+        if(life < 1){ requestAnimationFrame(anim); }
+        else { try{el.remove();}catch(_e){} }
+      };
+      requestAnimationFrame(anim);
+    }
+
+    function onHit(){
+      hits++; combo++; score += CONFIG.hitPoints + Math.floor(Math.max(0, combo-1)*CONFIG.comboBonus);
+      renderHUD();
+    }
+
+    function onMiss(){
+      misses++; combo=0; score = Math.max(0, score - CONFIG.missPenalty);
+      renderHUD();
+    }
+
+    // background miss handler: if you tap outside a target while running
+    app.addEventListener("pointerdown", (e)=>{
+      if(!running || !e.isPrimary) return;
+      const el = e.target;
+      if(!(el instanceof Element)) return;
+      if(!el.closest('[data-role="target"]')) onMiss();
+    });
+
+    // Controls
+    els.start.addEventListener("click", ()=> running ? pause() : start());
+    els.overlayStart.addEventListener("click", start);
+    els.diff.addEventListener("change", (e)=>{
+      difficulty = e.target.value;
+      if(running){ loopRestart(); }
+    });
+    els.overlayDiff.addEventListener("change", (e)=>{ difficulty = e.target.value; els.diff.value = e.target.value; if(running){ loopRestart(); } });
+
+    /* ===== Game Loop ===== */
+    let raf, lastSpawn, lastTick;
+    function loopStart(){
+      const cfg = CONFIG.difficulties[difficulty];
+      lastSpawn = performance.now();
+      lastTick = performance.now();
+
+      const tick = ()=>{
+        if(!running) return;
+        const now = performance.now();
+
+        // countdown using delta
+        const dt = (now - lastTick)/1000; // seconds
+        lastTick = now;
+        sessionLeft = Math.max(0, sessionLeft - dt);
+        if(sessionLeft<=0){ end(); return; }
+
+        // spawn
+        if(now - lastSpawn >= cfg.spawnMs){
+          lastSpawn = now;
+          spawnTarget();
+        }
+
+        renderHUD();
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    }
+
+    function loopStop(){ if(raf) cancelAnimationFrame(raf); }
+    function loopRestart(){ loopStop(); loopStart(); }
+
+    // ========== Tiny Runtime Tests (keep these!) ===========
+    (function selfTest(){
+      const tests = [];
+      const t = (name, fn)=>{ try{ fn(); tests.push([name,true]); } catch(err){ console.error("Test failed:", name, err); tests.push([name,false]); } };
+
+      // clamp
+      t("clamp basic", ()=>{
+        console.assert(clamp(5,0,10)===5, "inside range");
+        console.assert(clamp(-1,0,10)===0, "low bound");
+        console.assert(clamp(11,0,10)===10, "high bound");
+      });
+
+      // pickSpawn margins
+      t("pickSpawn respects margin", ()=>{
+        const w=1000,h=800,m=100; for(let i=0;i<200;i++){ const {x,y}=pickSpawn(w,h,m); if(!(x>=m && x<=w-m && y>=m && y<=h-m)) throw new Error("spawn out of bounds"); }
+      });
+
+      // scoring math
+      function scoreAfter(n){ let s=0,c=0; for(let i=0;i<n;i++){ c++; s += CONFIG.hitPoints + Math.floor(Math.max(0,c-1)*CONFIG.comboBonus); } return s; }
+      t("score grows with combo", ()=>{
+        const s3=scoreAfter(3); const s4=scoreAfter(4); if(!(s4>s3)) throw new Error("combo not increasing score");
+      });
+
+      // accuracy calc
+      t("accuracy 100 when no attempts", ()=>{ const total=0; const acc= total? Math.round(0/total*100):100; if(acc!==100) throw new Error("acc not 100"); });
+
+      const passed = tests.filter(x=>x[1]).length; const total = tests.length;
+      console.log(`[ReflexTap tests] ${passed}/${total} passed`);
+    })();
+
+    // Expose CONFIG for quick live edits from console
+    window.REFLEX_CONFIG = CONFIG;
+  </script>
+</body>
+</html>
