@@ -1,2 +1,2 @@
 # Speedtapaa
-To develop my skills in coding.
+Practicing and Develop my skills with python and other languages.
