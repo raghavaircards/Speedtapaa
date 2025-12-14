@@ -10,6 +10,7 @@ const questions = [
             { text: "Strongly Agree", value: 4 }
         ]
     },
+
     {
         question: "I like to be the center of attention.",
         options: [
@@ -20,6 +21,7 @@ const questions = [
             { text: "Strongly Agree", value: 4 }
         ]
     },
+
     {
         question: "I am more capable than other people.",
         options: [
@@ -30,6 +32,7 @@ const questions = [
             { text: "Strongly Agree", value: 4 }
         ]
     },
+
     {
         question: "I like to look at myself in the mirror.",
         options: [
